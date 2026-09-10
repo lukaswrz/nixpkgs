@@ -2,15 +2,18 @@
 
 let
   inherit (lib)
+    attrNames
     concatLists
     concatMap
     escapeShellArgs
     isBool
     isList
+    join
     mapAttrsToList
     oldestSupportedReleaseIsAtLeast
     optional
     stringLength
+    throwIf
     warnIf
     ;
   inherit (lib.generators) mkValueStringDefault;
@@ -436,39 +439,60 @@ rec {
     optionFormat:
     let
       handlePair =
-        k: v:
-        if k == "" then
-          throw "lib.cli.toCommandLine only accepts non-empty option names."
-        else if isList v then
-          concatMap (handleOption k) v
-        else
-          handleOption k v;
+        spec: name: value:
+        throwIf (name == "") "lib.cli.toCommandLine only accepts non-empty option names." (
+          concatMap (renderOption spec) (prepareValue spec value)
+        );
 
-      handleOption = k: renderOption (optionFormat k) k;
-
-      renderOption =
-        {
-          option,
-          sep,
-          explicitBool,
-          formatArg ? mkValueString,
-        }:
-        k: v:
-        if v == null || (!explicitBool && v == false) then
-          [ ]
-        else if !explicitBool && v == true then
-          [ option ]
+      prepareValue =
+        spec: value:
+        if !isList value then
+          [ value ]
         else
           let
-            arg = formatArg v;
+            reprs = {
+              repeat = value;
+              join = [ (spec.joinArgs (map spec.formatArg value)) ];
+            };
           in
-          if sep != null then
-            [ "${option}${sep}${arg}" ]
+          reprs.${spec.listRepr}
+            or (throw "lib.cli.toCommandline requires that listRepr is one of: ${join ", " (attrNames reprs)}");
+
+      renderOption =
+        spec: value:
+        if value == null || (!spec.explicitBool && value == false) then
+          [ ]
+        else if !spec.explicitBool && value == true then
+          [ spec.option ]
+        else
+          let
+            arg = spec.formatArg value;
+          in
+          if spec.sep != null then
+            [ "${spec.option}${spec.sep}${arg}" ]
           else
             [
-              option
+              spec.option
               arg
             ];
+
+      toSpec =
+        optionName:
+        (
+          {
+            option,
+            sep,
+            explicitBool,
+            formatArg ? mkValueString,
+            listRepr ? "repeat",
+            joinArgs ? join ",",
+          }@spec:
+          {
+            inherit formatArg listRepr joinArgs;
+          }
+          // spec
+        )
+          (optionFormat optionName);
     in
-    attrs: concatLists (mapAttrsToList handlePair attrs);
+    attrs: concatLists (mapAttrsToList (name: handlePair (toSpec name) name) attrs);
 }
